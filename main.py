@@ -90,6 +90,6 @@ def ping(message):
     bot.send_message(message.chat.id, "pong 🏓")
 
 # ЭТО САМОЕ ГЛАВНОЕ - ПРАВИЛЬНАЯ КОНСТРУКЦИЯ!
-if name == 'main':
+if __name__ == '__main__':
     print("✅ Бот запущен и готов к работе!")
     bot.polling(non_stop=True)
