@@ -57,11 +57,9 @@ def handle_text(message):
     user_id = message.from_user.id
     
     if message.text == "🛍 Каталог":
-        # Здесь будет вызов каталога
         bot.send_message(message.chat.id, "Раздел каталога в разработке")
     
     elif message.text == "💰 Баланс":
-        # Здесь будет проверка баланса
         bot.send_message(message.chat.id, f"💰 Твой баланс: 0 руб.")
     
     elif message.text == "📞 Поддержка":
@@ -72,22 +70,26 @@ def handle_text(message):
         )
     
     elif message.text == "📊 Админ-панель" and user_id == config.ADMIN_ID:
-        # Передаем управление в admin_handlers
-        admin_handlers.show_admin_panel(message)
+        bot.send_message(message.chat.id, "Админ-панель в разработке")
     
     else:
         bot.send_message(message.chat.id, "Используй кнопки меню для навигации.")
 
-# Команда для получения своего ID (полезно для добавления в админы)
+# Команда для получения своего ID
 @bot.message_handler(commands=['myid'])
 def myid(message):
     bot.send_message(
         message.chat.id,
-        f"🆔 Твой Telegram ID: {message.from_user.id}\n"
-        f"Отправь этот номер администратору, если нужно.",
+        f"🆔 Твой Telegram ID: {message.from_user.id}",
         parse_mode='Markdown'
     )
 
+# Команда для проверки работы бота
+@bot.message_handler(commands=['ping'])
+def ping(message):
+    bot.send_message(message.chat.id, "pong 🏓")
+
+# ЭТО САМОЕ ГЛАВНОЕ - ПРАВИЛЬНАЯ КОНСТРУКЦИЯ!
 if name == 'main':
-    print("Бот запущен!")
+    print("✅ Бот запущен и готов к работе!")
     bot.polling(non_stop=True)
