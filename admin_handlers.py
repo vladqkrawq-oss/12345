@@ -18,6 +18,62 @@ conn.commit()
 # Словарь для хранения страниц пользователей
 users_page = {}
 
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (ОПРЕДЕЛЯЕМ ИХ ПЕРВЫМИ) ==========
+
+def process_product_name(message):
+    """Обработка названия товара после ввода"""
+    product_name = message.text
+    bot.send_message(message.chat.id, f"Введите цену товара '{product_name}':")
+    # Здесь можно сохранить название во временной переменной
+    # и запросить цену
+    # bot.register_next_step_handler(message, process_product_price)
+
+def get_user_balance(message):
+    """Изменение баланса пользователя"""
+    user_id = message.text
+    bot.send_message(message.chat.id, f"Введите новую сумму для пользователя {user_id}:")
+    # Здесь можно запросить сумму
+    # bot.register_next_step_handler(message, update_balance, user_id)
+
+def show_users_page(bot, chat_id, page):
+    """Показывает список пользователей по страницам"""
+    # Здесь должна быть логика показа пользователей из БД
+    bot.send_message(chat_id, f"Страница {page} пользователей (функция в разработке)")
+
+def exit_admin_panel(message):
+    """Выход из админ-панели"""
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(
+        types.KeyboardButton("🛍 Каталог"),
+        types.KeyboardButton("💰 Баланс"),
+        types.KeyboardButton("📞 Поддержка")
+    )
+    bot.send_message(message.chat.id, "Вы вышли из админ-панели.", reply_markup=markup)
+
+def select_product_to_edit(message):
+    """Выбор товара для редактирования"""
+    cursor.execute('SELECT * FROM products')
+    product_list = cursor.fetchall()
+    if not product_list:
+        bot.send_message(message.chat.id, "📭 Товаров нет.")
+        return
+
+    markup = types.InlineKeyboardMarkup()
+    for product in product_list:
+        button = types.InlineKeyboardButton(
+            text=f"{product[1]} - {product[2]} руб.", 
+            callback_data=f"edit_{product[0]}"
+        )
+        markup.add(button)
+    
+    bot.send_message(
+        message.chat.id, 
+        "✏️ Выберите товар для редактирования:", 
+        reply_markup=markup
+    )
+
+# ========== ОСНОВНАЯ ФУНКЦИЯ НАСТРОЙКИ ОБРАБОТЧИКОВ ==========
+
 def setup_admin_handlers(bot):
     
     def show_admin_panel(message):
@@ -37,21 +93,6 @@ def setup_admin_handlers(bot):
         )
         bot.send_message(message.chat.id, "🔧 Админ-панель\nВыберите действие:", reply_markup=markup)
 
-    def show_users_page(bot, chat_id, page):
-        """Показывает список пользователей по страницам"""
-        # Здесь должна быть логика показа пользователей
-        bot.send_message(chat_id, f"Страница {page} пользователей (функция в разработке)")
-
-    def exit_admin_panel(message):
-        """Выход из админ-панели"""
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add(
-            types.KeyboardButton("🛍 Каталог"),
-            types.KeyboardButton("💰 Баланс"),
-            types.KeyboardButton("📞 Поддержка")
-        )
-        bot.send_message(message.chat.id, "Вы вышли из админ-панели.", reply_markup=markup)
-
     # Обработчик текстовых сообщений в админ-панели
     @bot.message_handler(func=lambda message: message.from_user.id == config.ADMIN_ID)
     def admin_commands(message):
@@ -64,10 +105,9 @@ def setup_admin_handlers(bot):
         elif message.text == "👥 Количество пользователей":
             users_page[chat_id] = 1
             show_users_page(bot, chat_id, users_page[chat_id])
-
-        elif message.text == "➕ Добавить товар":
+          elif message.text == "➕ Добавить товар":
             bot.send_message(chat_id, "Введите название товара:")
-            bot.register_next_step_handler(message, process_product_name)
+            bot.register_next_step_handler(message, process_product_name)  # ← теперь функция определена выше!
     
         elif message.text == "❌ Удалить товар":
             cursor.execute('SELECT * FROM products')
@@ -93,7 +133,8 @@ def setup_admin_handlers(bot):
         
         else:
             bot.send_message(message.chat.id, "Неизвестная команда. Пожалуйста, выберите одну из опций.")
-  # Обработчик для пагинации пользователей
+
+    # Обработчик для пагинации пользователей
     @bot.callback_query_handler(func=lambda call: call.data.startswith('users_page_'))
     def change_users_page(call):
         page_number = int(call.data.split('_')[2])
@@ -118,40 +159,6 @@ def setup_admin_handlers(bot):
         product_id = int(call.data.split('_')[1])
         bot.send_message(call.message.chat.id, f"Редактирование товара ID {product_id} (функция в разработке)")
         bot.answer_callback_query(call.id)
-    
-    # Функция выбора товара для редактирования
-    def select_product_to_edit(message):
-        cursor.execute('SELECT * FROM products')
-        product_list = cursor.fetchall()
-        if not product_list:
-            bot.send_message(message.chat.id, "📭 Товаров нет.")
-            return
-
-        markup = types.InlineKeyboardMarkup()
-        for product in product_list:
-            # ВАЖНО: правильный отступ - 4 пробела!
-            button = types.InlineKeyboardButton(
-                text=f"{product[1]} - {product[2]} руб.", 
-                callback_data=f"edit_{product[0]}"
-            )
-            markup.add(button)
-        
-        # ОТПРАВЛЯЕМ сообщение с клавиатурой!
-        bot.send_message(
-            message.chat.id, 
-            "✏️ Выберите товар для редактирования:", 
-            reply_markup=markup
-        )
-
-    # Функция для изменения баланса (заглушка)
-    def get_user_balance(message):
-        user_id = message.text
-        bot.send_message(message.chat.id, f"Функция изменения баланса для пользователя {user_id} в разработке.")
-
-    # Функция для добавления товара (заглушка)
-    def process_product_name(message):
-        product_name = message.text
-        bot.send_message(message.chat.id, f"Товар '{product_name}' будет добавлен (функция в разработке).")
 
     # Возвращаем функцию показа админ-панели для использования в main.py
     return show_admin_panel
