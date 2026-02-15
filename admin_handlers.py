@@ -18,7 +18,7 @@ conn.commit()
 # Словарь для хранения страниц пользователей
 users_page = {}
 
-# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (ОПРЕДЕЛЯЕМ ИХ ПЕРВЫМИ) ==========
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 
 def process_product_name(message):
     """Обработка названия товара после ввода"""
@@ -37,7 +37,6 @@ def get_user_balance(message):
 
 def show_users_page(bot, chat_id, page):
     """Показывает список пользователей по страницам"""
-    # Здесь должна быть логика показа пользователей из БД
     bot.send_message(chat_id, f"Страница {page} пользователей (функция в разработке)")
 
 def exit_admin_panel(message):
@@ -72,10 +71,13 @@ def select_product_to_edit(message):
         reply_markup=markup
     )
 
-# ========== ОСНОВНАЯ ФУНКЦИЯ НАСТРОЙКИ ОБРАБОТЧИКОВ ==========
+# ========== ОСНОВНАЯ ФУНКЦИЯ ==========
 
 def setup_admin_handlers(bot):
+    global bot_instance
+    bot_instance = bot
     
+    @bot.message_handler(func=lambda message: message.text == "📊 Админ-панель")
     def show_admin_panel(message):
         """Показывает админ-панель"""
         if message.from_user.id != config.ADMIN_ID:
@@ -93,7 +95,6 @@ def setup_admin_handlers(bot):
         )
         bot.send_message(message.chat.id, "🔧 Админ-панель\nВыберите действие:", reply_markup=markup)
 
-    # Обработчик текстовых сообщений в админ-панели
     @bot.message_handler(func=lambda message: message.from_user.id == config.ADMIN_ID)
     def admin_commands(message):
         chat_id = message.chat.id
@@ -105,9 +106,10 @@ def setup_admin_handlers(bot):
         elif message.text == "👥 Количество пользователей":
             users_page[chat_id] = 1
             show_users_page(bot, chat_id, users_page[chat_id])
-          elif message.text == "➕ Добавить товар":
+
+        elif message.text == "➕ Добавить товар":
             bot.send_message(chat_id, "Введите название товара:")
-            bot.register_next_step_handler(message, process_product_name)  # ← теперь функция определена выше!
+            bot.register_next_step_handler(message, process_product_name)
     
         elif message.text == "❌ Удалить товар":
             cursor.execute('SELECT * FROM products')
@@ -134,7 +136,6 @@ def setup_admin_handlers(bot):
         else:
             bot.send_message(message.chat.id, "Неизвестная команда. Пожалуйста, выберите одну из опций.")
 
-    # Обработчик для пагинации пользователей
     @bot.callback_query_handler(func=lambda call: call.data.startswith('users_page_'))
     def change_users_page(call):
         page_number = int(call.data.split('_')[2])
@@ -142,7 +143,6 @@ def setup_admin_handlers(bot):
         bot.delete_message(call.message.chat.id, call.message.message_id)
         show_users_page(bot, call.message.chat.id, page_number)
     
-    # Обработчик для удаления товара
     @bot.callback_query_handler(func=lambda call: call.data.startswith('delete_product_'))
     def delete_product(call):
         product_id = int(call.data.split('_')[2])
@@ -153,12 +153,8 @@ def setup_admin_handlers(bot):
         bot.send_message(call.message.chat.id, "✅ Товар успешно удален.")
         bot.answer_callback_query(call.id)
 
-    # Обработчик для выбора товара для редактирования
     @bot.callback_query_handler(func=lambda call: call.data.startswith('edit_'))
     def edit_product(call):
         product_id = int(call.data.split('_')[1])
         bot.send_message(call.message.chat.id, f"Редактирование товара ID {product_id} (функция в разработке)")
         bot.answer_callback_query(call.id)
-
-    # Возвращаем функцию показа админ-панели для использования в main.py
-    return show_admin_panel
