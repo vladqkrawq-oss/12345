@@ -142,4 +142,4 @@ def setup_admin_handlers(bot):
 
         markup = types.InlineKeyboardMarkup()
         for product in product_list:
-          
+          markup.add(types.InlineKeyboardButton(product[1], callback_data=f"edit_{product[0]}"))
