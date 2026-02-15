@@ -1,256 +1,294 @@
-from telebot import types, TeleBot
-import database
-import utils
-from yoomoney import Quickpay, Client
+from telebot import types
 import config
+import sqlite3
+import requests
+import json
+import time
+from datetime import datetime
 
+# Словарь для хранения информации о платежах
 invoices = {}
 
+# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С CRYPTOBOT ==========
+
+def get_crypto_invoice(amount_rub):
+    """Создание счета в Cryptobot"""
+    if not config.CRYPTOPAY_API_TOKEN:
+        return None, None
+    
+    # Конвертация RUB в USDT (примерный курс)
+    usdt_rate = get_usdt_rate()
+    amount_usdt = round(amount_rub / usdt_rate, 2)
+    
+    url = "https://pay.crypt.bot/api/createInvoice"
+    headers = {
+        "Crypto-Pay-API-Token": config.CRYPTOPAY_API_TOKEN,
+        "Content-Type": "application/json"
+    }
+    
+    # Создаём уникальный идентификатор
+    payload = f"user_{int(time.time())}"
+    
+    data = {
+        "asset": "USDT",
+        "amount": str(amount_usdt),
+        "description": f"Пополнение баланса на {amount_rub} RUB",
+        "payload": payload,
+        "paid_btn_name": "viewItem",
+        "paid_btn_url": "https://t.me/YourBotUsername",  # Замени на username своего бота
+        "allow_comments": False,
+        "allow_anonymous": False,
+        "expires_in": 300  # 5 минут
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('ok'):
+                invoice = result['result']
+                return invoice['pay_url'], invoice['invoice_id'], payload, amount_usdt
+    except Exception as e:
+        print(f"Ошибка создания счета Cryptobot: {e}")
+    
+    return None, None, None, None
+
+def check_crypto_payment(invoice_id):
+    """Проверка статуса оплаты в Cryptobot"""
+    if not config.CRYPTOPAY_API_TOKEN:
+        return None
+    
+    url = "https://pay.crypt.bot/api/getInvoices"
+    headers = {
+        "Crypto-Pay-API-Token": config.CRYPTOPAY_API_TOKEN,
+        "Content-Type": "application/json"
+    }
+    
+    params = {
+        "invoice_ids": str(invoice_id)
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('ok') and result.get('result', {}).get('items'):
+                for invoice in result['result']['items']:
+                    if str(invoice['invoice_id']) == str(invoice_id):
+                        return invoice['status']
+    except Exception as e:
+        print(f"Ошибка проверки платежа: {e}")
+    
+    return None
+
+def get_usdt_rate():
+    """Получение курса USDT к RUB"""
+    try:
+        response = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=rub", timeout=10)
+        if response.status_code == 200:
+            return response.json()['tether']['rub']
+    except:
+        pass
+    # Курс по умолчанию если API недоступен
+    return 90.0
+
+# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С ЮMONEY ==========
+
+def check_yoomoney_payment(label):
+    """Проверка статуса платежа ЮMoney"""
+    # Здесь должна быть реализация проверки ЮMoney
+    # Так как у тебя нет YOOMONEY_API_TOKEN в config.py, эта функция временно отключена
+    return None
+
+# ========== ОСНОВНЫЕ ОБРАБОТЧИКИ ==========
+
 def setup_payment_handlers(bot):
+    
     @bot.callback_query_handler(func=lambda call: call.data == 'top_up')
     def top_up_balance(call):
-        markup = types.InlineKeyboardMarkup()
-        cryptobot_button = types.InlineKeyboardButton(text="🤖 Cryptobot", callback_data='top_up_cryptobot')
-        umoney_button = types.InlineKeyboardButton(text="💳 ЮMoney", callback_data='top_up_umoney')
-        markup.add(cryptobot_button, umoney_button)
-        bot.send_message(call.message.chat.id, "Выберите способ оплаты:", reply_markup=markup)
         bot.answer_callback_query(call.id)
     
     @bot.callback_query_handler(func=lambda call: call.data == 'top_up_cryptobot')
     def top_up_cryptobot(call):
-        bot.send_message(call.message.chat.id, "Введите сумму в рублях, на которую вы хотите пополнить баланс (от 5 до 15000 руб):", reply_markup=types.ReplyKeyboardRemove())
-        bot.register_next_step_handler(call.message, process_top_up_cryptobot_step)
+        msg = bot.send_message(
+            call.message.chat.id,
+            "💰 Введите сумму в рублях (от 50 до 15000 руб):\n"
+            "Минимальная сумма: 50 RUB\n"
+            "Максимальная сумма: 15000 RUB",
+            reply_markup=types.ReplyKeyboardRemove()
+        )
+        bot.register_next_step_handler(msg, process_crypto_payment)
     
-    @bot.callback_query_handler(func=lambda call: call.data == 'top_up_umoney')
-    def top_up_umoney(call):
-        bot.send_message(call.message.chat.id, "Введите сумму в рублях, на которую вы хотите пополнить баланс (от 5 до 15000 руб):", reply_markup=types.ReplyKeyboardRemove())
-        bot.register_next_step_handler(call.message, process_top_up_umoney_step)
-    
-    def process_top_up_cryptobot_step(message):
+    def process_crypto_payment(message):
         try:
-            amount_rub = float(message.text)
+            amount_rub = float(message.text.strip())
             chat_id = message.chat.id
-    
-            if amount_rub < 5 or amount_rub > 15000:
-                bot.send_message(chat_id, "Сумма пополнения должна быть от 5 до 15000 руб. Попробуйте снова.")
-                bot.register_next_step_handler(message, process_top_up_cryptobot_step)
-                return
-    
-            usd_to_rub_rate = utils.get_usd_to_rub_rate()
-            if usd_to_rub_rate is None:
-                bot.send_message(chat_id, "Ошибка: не удалось получить курс обмена.")
-                return
-            amount_usd = amount_rub / usd_to_rub_rate
-    
-            pay_link, invoice_id = utils.get_pay_link(amount_usd)
-            if pay_link and invoice_id:
-                markup_message = bot.send_message(chat_id, "Перейдите по этой ссылке для оплаты и нажмите 'Проверить оплату' 💸")
-                msg = markup_message.message_id
-    
-                invoices[chat_id] = {'invoice_id': invoice_id, 'amount_rub': amount_rub, 'msg_id': msg, 'status': 'pending'}
-                
-                markup = types.InlineKeyboardMarkup()
-                markup.add(types.InlineKeyboardButton(text=f"Оплатить {amount_rub} руб", url=pay_link))
-                markup.add(types.InlineKeyboardButton(text="Проверить оплату", callback_data=f'check_payment_cryptobot_{invoice_id}'))
-                markup.add(types.InlineKeyboardButton(text="❌ Отмена", callback_data=f'cancel_payment_{invoice_id}'))
-    
-                bot.edit_message_reply_markup(chat_id, message_id=msg, reply_markup=markup)
-            else:
-                bot.send_message(chat_id, 'Ошибка: Не удалось создать счет на оплату❌')
-    
-        except ValueError:
-            bot.send_message(message.chat.id, "Ошибка: введите корректную сумму!❌")
-            bot.register_next_step_handler(message, process_top_up_cryptobot_step)
-    
-    def process_top_up_umoney_step(message):
-        try:
-            amount_rub = float(message.text)
-            chat_id = message.chat.id
-    
-            if amount_rub < 5 or amount_rub > 15000:
-                bot.send_message(chat_id, "Сумма пополнения должна быть от 5 до 15000 руб. Попробуйте снова.")
-                bot.register_next_step_handler(message, process_top_up_umoney_step)
-                return
-    
-            unique_label = f"{chat_id}_{message.message_id}"
-            quickpay = Quickpay(
-                receiver=config.YOOMONEY_RECEIVER,
-                quickpay_form="shop",
-                targets="Пополнение баланса",
-                paymentType="SB",
-                sum=amount_rub,
-                label=unique_label
-            )
-    
-            pay_link = quickpay.redirected_url
-            markup_message = bot.send_message(chat_id, "Перейдите по этой ссылке для оплаты и нажмите 'Проверить оплату' 💸")
-            msg = markup_message.message_id
-    
-            invoices[chat_id] = {'label': unique_label, 'amount_rub': amount_rub, 'msg_id': msg, 'status': 'pending'}
             
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton(text=f"Оплатить {amount_rub} руб", url=pay_link))
-            markup.add(types.InlineKeyboardButton(text="Проверить оплату", callback_data=f'check_payment_umoney_{unique_label}'))
-            markup.add(types.InlineKeyboardButton(text="❌ Отмена", callback_data=f'cancel_payment_{unique_label}'))
-    
-            bot.edit_message_reply_markup(chat_id, message_id=msg, reply_markup=markup)
-    
-        except ValueError:
-            bot.send_message(message.chat.id, "Ошибка: введите корректную сумму!❌")
-            bot.register_next_step_handler(message, process_top_up_umoney_step)
-    
-    @bot.callback_query_handler(func=lambda call: call.data.startswith('check_payment_cryptobot_'))
-    def check_payment_cryptobot(call):
-        chat_id = call.message.chat.id
-        invoice_id = call.data.split('check_payment_cryptobot_')[1]
-        payment_status = utils.check_payment_status(invoice_id)
-    
-        if payment_status and payment_status.get('ok'):
-            if 'items' in payment_status['result']:
-                invoice = next((inv for inv in payment_status['result']['items'] if str(inv['invoice_id']) == invoice_id), None)
-                if invoice:
-                    status = invoice['status']
-                    if status == 'paid' and invoices[chat_id]['status'] == 'pending':
-                        invoices[chat_id]['status'] = 'paid'
-                        bot.send_message(chat_id, "Оплата прошла успешно!✅")
-                        
-                        conn = database.connect_db()
-                        cursor = conn.cursor()
-                        
-                        amount_rub = invoices[chat_id]['amount_rub']
-                        msg_id = invoices[chat_id]['msg_id']
-                        cursor.execute('UPDATE users SET balance = balance + ?, total_topups = total_topups + ?, total_topup_count = total_topup_count + 1 WHERE id = ?', (amount_rub, amount_rub, chat_id))
-                        conn.commit()
-    
-                        bot.delete_message(chat_id, msg_id)
-                        del invoices[chat_id]
-    
-                        bot.send_message(chat_id, f"Ваш баланс был успешно пополнен на {amount_rub:.2f} руб! 💸")
-                        cursor.close()
-                        conn.close()
-                    else:
-                        bot.answer_callback_query(call.id, 'Оплата не найдена ❌', show_alert=True)
-                else:
-                    bot.answer_callback_query(call.id, 'Счет не найден.', show_alert=True)
-            else:
-                print(f"Ответ от API не содержит ключа 'items': {payment_status}")
-                bot.answer_callback_query(call.id, 'Ошибка при получении статуса оплаты.', show_alert=True)
-        else:
-            print(f"Ошибка при запросе статуса оплаты: {payment_status}")
-            bot.answer_callback_query(call.id, 'Ошибка при получении статуса оплаты.', show_alert=True)
-    
-    @bot.callback_query_handler(func=lambda call: call.data.startswith('check_payment_umoney_'))
-    def check_payment_umoney(call):
-        chat_id = call.message.chat.id
-        label = call.data.split('check_payment_umoney_')[1]
-        token = config.YOOMONEY_API_TOKEN  # Ваш API токен ЮMoney
-        client = Client(token)
-        history = client.operation_history(label=label)
-    
-        if history.operations:
-            operation = next((op for op in history.operations if op.label == label), None)
-            if operation and operation.status == 'success' and invoices[chat_id]['status'] == 'pending':
-                invoices[chat_id]['status'] = 'paid'
-                bot.send_message(chat_id, "Оплата прошла успешно!✅")
+            # Проверка суммы
+            if amount_rub < 50 or amount_rub > 15000:
+                bot.send_message(
+                    chat_id, 
+                    "❌ Сумма должна быть от 50 до 15000 руб.\n"
+                    "Попробуйте ещё раз:",
+                    reply_markup=types.ReplyKeyboardRemove()
+                )
+                bot.register_next_step_handler(message, process_crypto_payment)
+                return
+            
+            # Создаем счет в Cryptobot
+            pay_url, invoice_id, payload, amount_usdt = get_crypto_invoice(amount_rub)
+            
+            if pay_url and invoice_id:
+                # Сохраняем информацию о платеже
+                invoices[invoice_id] = {
+                    'chat_id': chat_id,
+                    'amount_rub': amount_rub,
+                    'amount_usdt': amount_usdt,
+                    'status': 'pending',
+                    'created_at': time.time()
+                }
                 
-                conn = database.connect_db()
+                # Создаем клавиатуру с ссылкой на оплату
+                markup = types.InlineKeyboardMarkup(row_width=1)
+                pay_button = types.InlineKeyboardButton(
+                    text=f"💳 Оплатить {amount_usdt} USDT (~{amount_rub} RUB)", 
+                    url=pay_url
+                )
+                check_button = types.InlineKeyboardButton(
+                    text="🔄 Проверить оплату", 
+                    callback_data=f'check_crypto_{invoice_id}'
+                )
+                cancel_button = types.InlineKeyboardButton(
+                    text="❌ Отмена", 
+                    callback_data=f'cancel_crypto_{invoice_id}'
+                )
+                markup.add(pay_button, check_button, cancel_button)
+                
+                bot.send_message(
+                    chat_id,
+                    f"🧾 Счет на оплату создан!\n\n"
+                    f"💰 Сумма: {amount_rub} RUB\n"
+                    f"💵 В USDT: ~{amount_usdt} USDT\n\n"
+                    f"1. Нажмите кнопку «Оплатить»\n"
+                    f"2. Оплатите счет в @CryptoBot\n"
+                    f"3. Нажмите «Проверить оплату»\n\n"
+                    f"⏳ Счет действителен 5 минут",
+                    reply_markup=markup
+                )
+            else:
+                bot.send_message(
+                    chat_id,
+                    "❌ Ошибка при создании счета. Попробуйте позже.",
+                    reply_markup=types.ReplyKeyboardRemove()
+                )
+                
+        except ValueError:
+            bot.send_message(
+                message.chat.id,
+                "❌ Пожалуйста, введите число (сумму в рублях):",
+                reply_markup=types.ReplyKeyboardRemove()
+            )
+            bot.register_next_step_handler(message, process_crypto_payment)
+    
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('check_crypto_'))
+    def check_crypto_payment_handler(call):
+        invoice_id = call.data.split('_')[2]
+        
+        if invoice_id in invoices:
+            # Проверяем статус платежа
+            status = check_crypto_payment(invoice_id)
+            
+            if status == 'paid':
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        cryptobot_button = types.InlineKeyboardButton(text="🤖 CryptoBot", callback_data='top_up_cryptobot')
+        markup.add(cryptobot_button)
+        bot.send_message(
+            call.message.chat.id, 
+            "💳 Выберите способ оплаты:\n\n"
+            "🤖 CryptoBot - оплата в криптовалюте (USDT)",
+            reply_markup=markup
+                )
+        # Платеж успешен
+                payment_info = invoices[invoice_id]
+                chat_id = payment_info['chat_id']
+                amount_rub = payment_info['amount_rub']
+                
+                # Обновляем баланс в базе данных
+                conn = sqlite3.connect(config.DATABASE_NAME)
                 cursor = conn.cursor()
                 
-                amount_rub = invoices[chat_id]['amount_rub']
-                msg_id = invoices[chat_id]['msg_id']
-                cursor.execute('UPDATE users SET balance = balance + ?, total_topups = total_topups + ?, total_topup_count = total_topup_count + 1 WHERE id = ?', (amount_rub, amount_rub, chat_id))
+                # Создаем таблицу users если её нет
+                cursor.execute('''CREATE TABLE IF NOT EXISTS users
+                                  (id INTEGER PRIMARY KEY,
+                                   balance REAL DEFAULT 0,
+                                   first_name TEXT,
+                                   username TEXT)''')
+                
+                # Проверяем существует ли пользователь
+                cursor.execute('SELECT id FROM users WHERE id = ?', (chat_id,))
+                if cursor.fetchone():
+                    cursor.execute('UPDATE users SET balance = balance + ? WHERE id = ?', (amount_rub, chat_id))
+                else:
+                    cursor.execute('INSERT INTO users (id, balance, first_name) VALUES (?, ?, ?)',
+                                 (chat_id, amount_rub, call.from_user.first_name))
+                
                 conn.commit()
-
-                bot.delete_message(chat_id, msg_id)
-                del invoices[chat_id]
-
-                bot.send_message(chat_id, f"Ваш баланс был успешно пополнен на {amount_rub:.2f} руб! 💸")
-                cursor.close()
                 conn.close()
+                
+                # Удаляем информацию о платеже
+                del invoices[invoice_id]
+                
+                # Удаляем сообщение с кнопками
+                bot.delete_message(chat_id, call.message.message_id)
+                
+                # Отправляем сообщение об успехе
+                bot.send_message(
+                    chat_id,
+                    f"✅ Оплата прошла успешно!\n"
+                    f"💰 Баланс пополнен на {amount_rub} RUB",
+                    reply_markup=get_main_keyboard(chat_id)
+                )
+                
+                bot.answer_callback_query(call.id, "✅ Оплата подтверждена!")
+                
+            elif status == 'active':
+                bot.answer_callback_query(call.id, "⏳ Счет создан, но ещё не оплачен", show_alert=False)
             else:
-                bot.answer_callback_query(call.id, 'Оплата не найдена ❌', show_alert=True)
+                bot.answer_callback_query(call.id, "❌ Счет не найден или истёк", show_alert=True)
         else:
-            bot.answer_callback_query(call.id, 'Счет не найден.', show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Платеж не найден", show_alert=True)
     
-    @bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_payment_'))
-    def cancel_payment(call):
-        chat_id = call.message.chat.id
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_crypto_'))
+    def cancel_crypto_payment(call):
+        invoice_id = call.data.split('_')[2]
         
-        if chat_id in invoices:
-            msg_id = invoices[chat_id]['msg_id']
-            del invoices[chat_id]
-    
-            bot.delete_message(chat_id, msg_id)
-    
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        profile_button = types.KeyboardButton("👤 Профиль")
-        products_button = types.KeyboardButton("🛍️ Товары")
-        markup.add(profile_button, products_button)
-    
-        bot.send_message(chat_id, "Пополнение баланса отменено. ❌", reply_markup=markup)
-        bot.answer_callback_query(call.id)
-    
-    @bot.callback_query_handler(func=lambda call: call.data == 'gift_balance')
-    def gift_balance(call):
-        bot.send_message(call.message.chat.id, "Введите ID пользователя, которому вы хотите подарить баланс и затем сумму (пример: 12345678 1.50):", reply_markup=types.ReplyKeyboardRemove())
-        bot.register_next_step_handler(call.message, process_gift_balance_step)
-    
-    def process_gift_balance_step(message):
-        try:
-            chat_id = message.chat.id
-            parts = message.text.split()
-            if len(parts) != 2:
-                bot.send_message(chat_id, "Неверный формат. Введите данные в формате: ID Сумма (пример: 12345678 1.50)")
-                bot.register_next_step_handler(message, process_gift_balance_step)
-                return
-            
-            recipient_id = int(parts[0])
-            amount = float(parts[1])
-    
-            if amount < 0.0:
-                bot.send_message(chat_id, "Минимальная сумма перевода 0.20 руб. Попробуйте снова.")
-                bot.register_next_step_handler(message, process_gift_balance_step)
-                return
-    
-            conn = database.connect_db()
-            cursor = conn.cursor()
-    
-            cursor.execute('SELECT balance FROM users WHERE id = ?', (chat_id,))
-            sender_balance = cursor.fetchone()[0]
-    
-            if sender_balance < amount:
-                bot.send_message(chat_id, "У вас недостаточно средств для перевода. Попробуйте снова.")
-                return
-            
-            cursor.execute('SELECT first_name FROM users WHERE id = ?', (recipient_id,))
-            recipient = cursor.fetchone()
-    
-            if not recipient:
-                bot.send_message(chat_id, "Пользователь с указанным ID не найден. Попробуйте снова.")
-                return
-    
-            sender_balance -= amount
-            commission = amount * 0.1
-            net_amount = amount - commission
-    
-            cursor.execute('UPDATE users SET balance = ? WHERE id = ?', (sender_balance, chat_id))
-            cursor.execute('UPDATE users SET balance = balance + ? WHERE id = ?', (net_amount, recipient_id))
-            conn.commit()
-    
-            sender_name = cursor.execute('SELECT first_name FROM users WHERE id = ?', (chat_id,)).fetchone()[0]
-            
-            bot.send_message(chat_id, f"Вы успешно перевели {net_amount:.2f} руб пользователю {recipient[0]} 🎉")
+        if invoice_id in invoices:
+            del invoices[invoice_id]
+            bot.delete_message(call.message.chat.id, call.message.message_id)
             bot.send_message(
-                recipient_id,
-                f"Вы получили перевод {net_amount:.2f} руб от пользователя {sender_name} 🎉"
+                call.message.chat.id,
+                "❌ Платеж отменён",
+                reply_markup=get_main_keyboard(call.message.chat.id)
             )
-            
-            cursor.close()
-            conn.close()
+        
+        bot.answer_callback_query(call.id)
+
+def get_main_keyboard(chat_id):
+    """Возвращает основную клавиатуру в зависимости от прав"""
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     
-        except ValueError:
-            bot.send_message(message.chat.id, "Ошибка: введите корректные данные! ❌")
-            bot.register_next_step_handler(message, process_gift_balance_step)
-        except Exception as e:
-            bot.send_message(message.chat.id, f"Произошла ошибка: {str(e)} ❌")
-            bot.register_next_step_handler(message, process_gift_balance_step)
+    if chat_id == config.ADMIN_ID:
+        markup.add(
+            types.KeyboardButton("🛍 Каталог"),
+            types.KeyboardButton("💰 Баланс"),
+            types.KeyboardButton("📞 Поддержка")
+        )
+        markup.add(types.KeyboardButton("📊 Админ-панель"))
+    else:
+        markup.add(
+            types.KeyboardButton("🛍 Каталог"),
+            types.KeyboardButton("💰 Баланс"),
+            types.KeyboardButton("📞 Поддержка")
+        )
+    
+    return markup
