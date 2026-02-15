@@ -11,5 +11,5 @@ admin_handlers.setup_admin_handlers(bot)
 profile_handlers.setup_profile_handlers(bot) 
 payment_handlers.setup_payment_handlers(bot) 
  
-if name == 'main': 
+if __name__ == '__main__':
     bot.polling(non_stop=True)
