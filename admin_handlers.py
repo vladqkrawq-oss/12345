@@ -87,7 +87,7 @@ def setup_admin_handlers(bot):
         elif message.text == "💰 Изменить баланс":
             bot.send_message(chat_id, "Введите ID пользователя, чей баланс вы хотите изменить:")
             bot.register_next_step_handler(message, get_user_balance)
-            elif message.text == "👥 Количество пользователей":
+        elif message.text == "👥 Количество пользователей":
             users_page[chat_id] = 1
             show_users_page(bot, chat_id, users_page[chat_id])
 
