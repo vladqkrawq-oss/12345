@@ -4,7 +4,7 @@ from flask import Flask
 import main  # ЭТО ТВОЙ ОСНОВНОЙ ФАЙЛ БОТА (main.py)
 
 # Создаем Flask приложение
-app = Flask(name)
+app = Flask(__name__)
 
 @app.route('/')
 def home():
